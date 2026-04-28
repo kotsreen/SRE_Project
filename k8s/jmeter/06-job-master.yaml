@@ -1,0 +1,85 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jmeter-master
+  namespace: jmeter
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: jmeter-master
+    spec:
+      restartPolicy: Never
+      serviceAccountName: jmeter-master
+      containers:
+        - name: master
+          image: eclipse-temurin:21-jre-noble
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: TARGET_THREADS
+              value: "5"
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq curl jq ca-certificates unzip >/dev/null
+              JM_VER="5.6.3"
+              JM_TGZ="apache-jmeter-${JM_VER}.tgz"
+              if [ ! -d "/opt/apache-jmeter-${JM_VER}" ]; then
+                curl -fsSL -o "/tmp/${JM_TGZ}" \
+                  "https://archive.apache.org/dist/jmeter/binaries/${JM_TGZ}"
+                tar -xzf "/tmp/${JM_TGZ}" -C /opt
+              fi
+              export PATH="/opt/apache-jmeter-${JM_VER}/bin:${PATH}"
+              TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              CACERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+              API="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+              echo "Waiting for at least 2 Ready jmeter-slave pods..."
+              for attempt in $(seq 1 90); do
+                COUNT="$(curl -fsS --cacert "${CACERT}" -H "Authorization: Bearer ${TOKEN}" \
+                  "${API}/api/v1/namespaces/jmeter/pods?labelSelector=app%3Djmeter-slave" \
+                  | jq '[.items[] | select((.status.conditions // []) | any(.type=="Ready" and .status=="True"))] | length')"
+                if [ "${COUNT:-0}" -ge 2 ]; then
+                  echo "Found ${COUNT} Ready slaves."
+                  break
+                fi
+                echo "attempt ${attempt}: ready_slaves=${COUNT:-0}"
+                sleep 2
+              done
+              sleep 3
+              REMOTES="$(curl -fsS --cacert "${CACERT}" -H "Authorization: Bearer ${TOKEN}" \
+                "${API}/api/v1/namespaces/jmeter/pods?labelSelector=app%3Djmeter-slave" \
+                | jq -r '[.items[] | select((.status.conditions // []) | any(.type=="Ready" and .status=="True")) | .metadata.name + ".jmeter-slaves.jmeter.svc.cluster.local"] | join(",")')"
+              if [ -z "${REMOTES}" ] || [ "${REMOTES}" = "null" ]; then
+                echo "ERROR: no slave hostnames discovered."
+                exit 1
+              fi
+              echo "Remote hosts: ${REMOTES}"
+              mkdir -p /work
+              cp /tests/test.jmx /work/test.jmx
+              exec jmeter -n \
+                -t /work/test.jmx \
+                -l /work/result.jtl \
+                -j /work/jmeter.log \
+                -Jthreads="${TARGET_THREADS}" \
+                -Djava.rmi.server.hostname="${POD_IP}" \
+                -R "${REMOTES}"
+          volumeMounts:
+            - name: tests
+              mountPath: /tests
+              readOnly: true
+      volumes:
+        - name: tests
+          configMap:
+            name: jmeter-config
+            items:
+              - key: test.jmx
+                path: test.jmx

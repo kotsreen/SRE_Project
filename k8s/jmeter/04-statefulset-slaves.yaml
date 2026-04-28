@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: jmeter-slave
+  namespace: jmeter
+  labels:
+    app: jmeter-slave
+spec:
+  serviceName: jmeter-slaves
+  podManagementPolicy: Parallel
+  replicas: 2
+  selector:
+    matchLabels:
+      app: jmeter-slave
+  template:
+    metadata:
+      labels:
+        app: jmeter-slave
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: jmeter-server
+          image: justb4/jmeter:5.6.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rmi-registry
+              containerPort: 1099
+            - name: rmi-server
+              containerPort: 50000
+          env:
+            - name: HEAP
+              value: "-Xms512m -Xmx512m"
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              POD="$(hostname -s)"
+              RMI_HOST="${POD}.jmeter-slaves.jmeter.svc.cluster.local"
+              echo "Starting jmeter-server as ${RMI_HOST}"
+              exec jmeter-server \
+                -Djava.rmi.server.hostname="${RMI_HOST}" \
+                -Dserver.rmi.ssl.disable=true \
+                -Dserver.rmi.localport=50000
+          readinessProbe:
+            tcpSocket:
+              port: 1099
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 1099
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "768Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"

@@ -1,0 +1,29 @@
+# Example only — install KEDA + Prometheus + JMeter metrics first, then adapt and apply.
+# https://keda.sh/docs/latest/scalers/prometheus/
+#
+# Goal: scale slaves when average active threads per pod > 5 (requires a metric such as
+# jmeter_threads from Backend Listener / Prometheus exporter).
+#
+# 1. helm repo add kedacore https://kedacore.github.io/charts && helm install keda kedacore/keda --namespace keda --create-namespace
+# 2. Expose Prometheus with a metric that reflects per-slave active threads (your pipeline).
+# 3. kubectl apply -f this-file (after filling prometheusAddress and query).
+#
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: jmeter-slave-vu
+#   namespace: jmeter
+# spec:
+#   scaleTargetRef:
+#     name: jmeter-slave
+#     kind: StatefulSet
+#     apiVersion: apps/v1
+#   minReplicaCount: 2
+#   maxReplicaCount: 10
+#   triggers:
+#     - type: prometheus
+#       metadata:
+#         serverAddress: http://prometheus.monitoring.svc:9090
+#         threshold: "5"
+#         query: |
+#           avg by (pod) (your_jmeter_active_threads_metric_here)

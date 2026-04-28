@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: jmeter-slaves
+  namespace: jmeter
+  labels:
+    app: jmeter-slave
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app: jmeter-slave
+  ports:
+    - name: rmi-registry
+      port: 1099
+      targetPort: 1099
+    - name: rmi-server
+      port: 50000
+      targetPort: 50000
